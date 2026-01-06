@@ -1,12 +1,8 @@
 # poster_VDB
 
-Rendu : 16 janvier
+# The diversity and function of sourdough starter microbiomes
 
-Données : repo de bases publique ou données de publi
-
-Ne pas suivre que le naratif de la publi
-
-Appli interactif pas forcement valorisé
+https://elifesciences.org/articles/61644#s4
 
 
 

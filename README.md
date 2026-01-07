@@ -19,7 +19,7 @@ sourdough_repset_16S_v2.fasta / sourdough_repset_ITS.fasta : sequences for all s
 - Beta-diversité par pays
 - Focus sur un ou plusieurs especes/taxons
 - Analyse phylogénétique : reconstruction correcte ?
-- 
+- ACP sample USA + France
 
 
 

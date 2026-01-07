@@ -14,5 +14,12 @@ sourdough_tab_16S.csv / sourdough_tab_ITS.csv : sample en colonnes par les asv e
 sourdough_tax_ITS.csv / sourdough_tax_16S.csv : taxonomy for all asv
 sourdough_repset_16S_v2.fasta / sourdough_repset_ITS.fasta : sequences for all sourdough
 
+### Idées :
+- Extraire organisme majoritaire pour chaque sample
+- Beta-diversité par pays
+- Focus sur un ou plusieurs especes/taxons
+- Analyse phylogénétique : reconstruction correcte ?
+- 
+
 
 

@@ -1,0 +1,151 @@
+---
+title: "vdb_poster_plot_notebook"
+---
+
+```{r,include=FALSE}
+pak::pkg_install(c("tidyverse", "vegan", "ggplot2"))
+
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    pak::pkg_install("BiocManager")
+pak::pkg_install(c("phyloseq","here"))
+```
+
+```{r}
+library(tidyverse)
+library(phyloseq)
+library(ggplot2)
+library(here)
+```
+
+```{r}
+# --- 1. Chargement des données ---
+# On définit le chemin vers le dossier de données à partir de la racine
+# here() pointera toujours vers "~/Desktop/VDB/poster_VDB" si ton projet y est créé.
+path_data <- "data/raw"
+path_figs <- "results/figures"
+
+# Métadonnées
+meta_df <- read.csv(here(path_data, "metadata500_starters.csv"), row.names = 1)
+
+# Table d'abondance (ASV table) - 16S
+otu_df <- read.csv(here(path_data, "sourdough_tab_16S.csv"), row.names = 1, check.names = FALSE)
+
+# Table de taxonomie - 16S
+tax_df <- read.csv(here(path_data, "sourdough_tax_16S.csv"), row.names = 1)
+```
+
+
+```{r}
+# --- 2. Nettoyage et Préparation ---
+
+# A. Nettoyage et Renommage de la Taxonomie
+tax_mat <- tax_df %>%
+  # On renomme les colonnes existantes
+  rename(
+    Kingdom = taxonomy1,
+    Phylum  = taxonomy2,
+    Class   = taxonomy3,
+    Order   = taxonomy4,
+    Family  = taxonomy5,
+    Genus   = taxonomy6,
+    Species = taxonomy7,
+    ASV = taxonomy8
+  ) %>%
+  as.matrix()
+
+# B. Conversion en matrices pour phyloseq
+otu_mat <- as.matrix(otu_df)
+
+# C. Vérification de la correspondance des IDs
+# Les noms de colonnes de l'OTU table doivent correspondre aux noms de lignes des métadonnées
+common_samples <- intersect(colnames(otu_mat), rownames(meta_df))
+print(paste("Nombre d'échantillons conservés :", length(common_samples)))
+
+# On filtre pour ne garder que ce qui match
+otu_mat <- otu_mat[, common_samples]
+meta_df <- meta_df[common_samples, ]
+
+# --- 3. Création de l'objet Phyloseq ---
+ps_16s <- phyloseq(
+  otu_table(otu_mat, taxa_are_rows = TRUE),
+  tax_table(tax_mat),
+  sample_data(meta_df)
+)
+
+# Petit nettoyage final : enlever les taxons avec 0 abondance (si existants après filtrage sample)
+ps_16s <- prune_taxa(taxa_sums(ps_16s) > 0, ps_16s)
+
+print(ps_16s)
+```
+
+```{r}
+# 1. On agglomère au niveau du Genre (pour simplifier)
+ps_genus <- tax_glom(ps_16s, taxrank = "Genus")
+
+# 2. On transforme en abondance relative (pourcentage)
+ps_rel <- transform_sample_counts(ps_genus, function(x) x / sum(x))
+
+# 3. On garde seulement les Top 10 Genres les plus abondants au total
+top10 <- names(sort(taxa_sums(ps_rel), decreasing = TRUE))[1:10]
+ps_top10 <- prune_taxa(top10, ps_rel)
+
+# 4. Conversion en dataframe pour ggplot
+df_top10 <- psmelt(ps_top10)
+
+# 5. Graphique
+p1 <- ggplot(df_top10, aes(x = Sample, y = Abundance, fill = Genus)) +
+  geom_bar(stat = "identity") +
+  theme_minimal() +
+  labs(title = "Composition bactérienne (Top 10 Genres)", y = "Abondance Relative") +
+  theme(axis.text.x = element_blank(), # On cache les noms des samples car illisibles (500 samples)
+        axis.ticks.x = element_blank())
+
+print(p1)
+```
+
+```{r}
+# 1. Calcul de l'ordination (PCoA avec distance Bray-Curtis)
+ord_pcoa <- ordinate(ps_16s, method = "PCoA", distance = "bray")
+
+# 2. Plot
+p2 <- plot_ordination(ps_16s, ord_pcoa, color = "Country") + # Assure-toi que la colonne s'appelle bien "Country" dans metadata
+  geom_point(size = 2, alpha = 0.7) +
+  stat_ellipse(type = "norm", linetype = 2) + # Ajoute des ellipses de confiance
+  theme_bw() +
+  labs(title = "Beta-Diversité des levains (Bray-Curtis)", 
+       color = "Pays d'origine")
+
+print(p2)
+```
+
+```{r}
+# --- Étape C améliorée : Comparaison USA vs France (France au premier plan) ---
+
+# 1. On s'assure d'avoir filtré et calculé l'ordination (comme avant)
+ps_fr_usa <- subset_samples(ps_16s, Country %in% c("France", "United States"))
+ps_fr_usa <- prune_taxa(taxa_sums(ps_fr_usa) > 0, ps_fr_usa)
+ord_fr_usa <- ordinate(ps_fr_usa, method = "PCoA", distance = "bray")
+
+# 2. IMPORTANT : On extrait les données du plot au lieu de tracer directement
+# justDF = TRUE permet de récupérer un dataframe avec les axes (Axis.1, Axis.2)
+plot_data <- plot_ordination(ps_fr_usa, ord_fr_usa, color = "Country", justDF = TRUE)
+
+# 3. On trie les données pour que la France soit en DERNIER
+plot_data_sorted <- plot_data %>% 
+  arrange(desc(Country)) 
+
+# 4. On trace le graphique manuellement avec ggplot
+p3 <- ggplot(plot_data_sorted, aes(x = Axis.1, y = Axis.2, color = Country)) +
+  geom_point(size = 3, alpha = 0.8) + # J'ai ajouté alpha (transparence) pour mieux voir les densités
+  scale_color_manual(values = c("France" = "#377eb8", "United States" = "#e41a1c")) + 
+  theme_classic() +
+  labs(title = "Comparaison structurelle : France vs USA",
+       x = "PCoA 1", # Tu peux personnaliser les noms d'axes ici
+       y = "PCoA 2")
+
+print(p3)
+
+ggsave(here(path_figs,"p3.svg"), width=8, height=6)
+```
+
+

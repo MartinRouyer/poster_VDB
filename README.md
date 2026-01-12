@@ -1,4 +1,9 @@
 # poster_VDB
+## Consignes : 
+Il faut produire une poster sur les données et/ou article de votre choix.
+L’accent doit être mis sur la construction des figures et leur inscription dans le narratif du poster.
+Vous devrez construire vos figures à l’aide d’un notebook R/Jupyter dont vous ferez un repo sur le gitlab de la formation.
+Si nécessaire pour pouvez assembler/modifier vos figures dans gimp/adobe/ etc…
 
 # The diversity and function of sourdough starter microbiomes
 

@@ -21,10 +21,15 @@ sourdough_repset_16S_v2.fasta / sourdough_repset_ITS.fasta : sequences for all s
 
 ### Idées :
 - Extraire organisme majoritaire pour chaque sample
-- Beta-diversité par pays
+- Beta-diversité par pays ou par cluster
 - Focus sur un ou plusieurs especes/taxons
 - Analyse phylogénétique : reconstruction correcte ?
-- ACP sample USA + France
+- ACP sample USA + France/Europe
 
+### Métrics intéréssantes
+- l'age du levain
+- refrigiratore vs roomtemp
+- Container material
+- Localisation du levain
 
 

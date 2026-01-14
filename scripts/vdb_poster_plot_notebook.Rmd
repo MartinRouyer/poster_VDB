@@ -12,6 +12,9 @@ library(tidyverse)
 library(phyloseq)
 library(ggplot2)
 library(here)
+
+# ggsave(here(path_figs,"p3.svg"), width=8, height=6)
+
 ```
 
 ```{r}
@@ -25,343 +28,734 @@ path_figs <- "results/figures"
 meta_df <- read.csv(here(path_data, "metadata500_starters.csv"), row.names = 1)
 
 # Table d'abondance (ASV table) - 16S
-otu_df <- read.csv(here(path_data, "sourdough_tab_16S.csv"), row.names = 1, check.names = FALSE)
+ab_16s_df <- read.csv(here(path_data, "sourdough_tab_16S.csv"), row.names = 1, check.names = FALSE)
 
 # Table de taxonomie - 16S
-tax_df <- read.csv(here(path_data, "sourdough_tax_16S.csv"), row.names = 1)
+tax_16s_df <- read.csv(here(path_data, "sourdough_tax_16S.csv"), row.names = 1)
+
+# Table d'abondance (ASV table) - ITS
+ab_its_df <- read.csv(here(path_data, "sourdough_tab_ITS.csv"), row.names = 1, check.names = FALSE)
+
+# Table de taxonomie - ITS
+tax_its_df <- read.csv(here(path_data, "sourdough_tax_ITS.csv"), row.names = 1)
 ```
 
 
 ```{r}
-# --- 2. Nettoyage et Préparation ---
+library(dplyr)
+library(phyloseq)
 
-# A. Nettoyage et Renommage de la Taxonomie
-tax_mat <- tax_df %>%
-  # On renomme les colonnes existantes
+# --- A. Nettoyage et Renommage de la Taxonomie ---
+
+# 16S
+tax_16s_mat <- tax_16s_df %>%
   rename(
-    Kingdom = taxonomy1,
-    Phylum  = taxonomy2,
-    Class   = taxonomy3,
-    Order   = taxonomy4,
-    Family  = taxonomy5,
-    Genus   = taxonomy6,
-    Species = taxonomy7,
-    ASV = taxonomy8
+    Kingdom = taxonomy1, Phylum = taxonomy2, Class = taxonomy3,
+    Order = taxonomy4, Family = taxonomy5, Genus = taxonomy6,
+    Species = taxonomy7, ASV = taxonomy8
   ) %>%
   as.matrix()
 
-# B. Conversion en matrices pour phyloseq
-otu_mat <- as.matrix(otu_df)
+# ITS (On applique la même logique, vérifie bien que ton fichier ITS a aussi 8 colonnes)
+tax_its_mat <- tax_its_df %>%
+  rename(
+    Kingdom = taxonomy1, Phylum = taxonomy2, Class = taxonomy3,
+    Order = taxonomy4, Family = taxonomy5, Genus = taxonomy6,
+    Species = taxonomy7, ASV = taxonomy8
+  ) %>%
+  as.matrix()
 
-# C. Vérification de la correspondance des IDs
-# Les noms de colonnes de l'OTU table doivent correspondre aux noms de lignes des métadonnées
-common_samples <- intersect(colnames(otu_mat), rownames(meta_df))
-print(paste("Nombre d'échantillons conservés :", length(common_samples)))
+# --- B. Conversion en matrices pour phyloseq ---
+ab_16s_mat <- as.matrix(ab_16s_df)
+ab_its_mat <- as.matrix(ab_its_df)
 
-# On filtre pour ne garder que ce qui match
-otu_mat <- otu_mat[, common_samples]
-meta_df <- meta_df[common_samples, ]
+# --- C. Vérification de la correspondance des IDs ---
+# On cherche l'intersection commune entre : 16S, ITS et Métadonnées
+common_samples <- Reduce(intersect, list(colnames(ab_16s_mat), colnames(ab_its_mat), rownames(meta_df)))
 
-# --- 3. Création de l'objet Phyloseq ---
-ps_16s <- phyloseq(
-  otu_table(otu_mat, taxa_are_rows = TRUE),
-  tax_table(tax_mat),
+print(paste("Nombre d'échantillons conservés (communs 16S & ITS) :", length(common_samples)))
+
+# On filtre les trois tables pour qu'elles soient parfaitement alignées
+ab_16s_mat <- ab_16s_mat[, common_samples]
+ab_its_mat <- ab_its_mat[, common_samples]
+meta_df    <- meta_df[common_samples, ]
+
+# --- 3. Création des objets Phyloseq ---
+
+# Objet 16S
+phylos_16s <- phyloseq(
+  otu_table(ab_16s_mat, taxa_are_rows = TRUE),
+  tax_table(tax_16s_mat),
   sample_data(meta_df)
 )
+# Nettoyage taxons vides 16S
+phylos_16s <- prune_taxa(taxa_sums(phylos_16s) > 0, phylos_16s)
 
-# Petit nettoyage final : enlever les taxons avec 0 abondance (si existants après filtrage sample)
-ps_16s <- prune_taxa(taxa_sums(ps_16s) > 0, ps_16s)
+# Objet ITS
+phylos_its <- phyloseq(
+  otu_table(ab_its_mat, taxa_are_rows = TRUE),
+  tax_table(tax_its_mat),
+  sample_data(meta_df)
+)
+# Nettoyage taxons vides ITS
+phylos_its <- prune_taxa(taxa_sums(phylos_its) > 0, phylos_its)
 
-print(ps_16s)
+print("--- Résumé 16S ---")
+print(phylos_16s)
+print("--- Résumé ITS ---")
+print(phylos_its)
 ```
 
 ```{r}
-# PCA
-dist_mat <- phyloseq::distance(ps_16s, method = "bray")
-pcoa_result <- ordinate(ps_16s, method = "PCoA", distance = dist_mat)
+# --- ANALYSE 16S ---
+cat("\n--- Début Analyse 16S ---\n")
+dist_mat_16s <- phyloseq::distance(phylos_16s, method = "bray")
+pcoa_16s     <- ordinate(phylos_16s, method = "PCoA", distance = dist_mat_16s)
 
-eigenvalues <- pcoa_result$values$Relative_eig
-cat("Variance expliquée par les 10 premiers axes:\n")
-print(cumsum(eigenvalues)[1:10])
+# Variance 16S
+eig_16s <- pcoa_16s$values$Relative_eig
+cat("16S - Variance expliquée par les 10 premiers axes:\n")
+print(cumsum(eig_16s)[1:10])
 
-n_axes <- which(cumsum(eigenvalues) >= 0.75)[1]  # Premier axe qui atteint 75%
-cat("\nNombre d'axes retenus pour capturer 75% de variance:", n_axes, "\n")
+n_axes_16s <- which(cumsum(eig_16s) >= 0.75)[1]
+cat("16S - Nombre d'axes pour 75% variance:", n_axes_16s, "\n")
 
-# Clustering
-coords <- pcoa_result$vectors[, 1:n_axes]
-
+# Clustering 16S
+coords_16s <- pcoa_16s$vectors[, 1:n_axes_16s]
 set.seed(42)
-kmeans_result <- kmeans(coords, centers = 4, nstart = 25, iter.max = 100)
-clusters <- kmeans_result$cluster
+kmeans_16s <- kmeans(coords_16s, centers = 5, nstart = 25, iter.max = 100)
+sample_data(phylos_16s)$Cluster <- as.factor(kmeans_16s$cluster)
 
-sample_data(ps_16s)$Cluster <- as.factor(clusters)
+
+# --- ANALYSE ITS ---
+cat("\n--- Début Analyse ITS ---\n")
+dist_mat_its <- phyloseq::distance(phylos_its, method = "bray")
+pcoa_its     <- ordinate(phylos_its, method = "PCoA", distance = dist_mat_its)
+
+# Variance ITS
+eig_its <- pcoa_its$values$Relative_eig
+cat("ITS - Variance expliquée par les 10 premiers axes:\n")
+print(cumsum(eig_its)[1:10])
+
+n_axes_its <- which(cumsum(eig_its) >= 0.75)[1]
+cat("ITS - Nombre d'axes pour 75% variance:", n_axes_its, "\n")
+
+# Clustering ITS
+# Note : on réutilise coords_its pour le kmeans spécifique à l'ITS
+coords_its <- pcoa_its$vectors[, 1:n_axes_its]
+set.seed(42) 
+kmeans_its <- kmeans(coords_its, centers = 5, nstart = 25, iter.max = 100)
+
+# Important : On stocke le cluster ITS dans l'objet phyloseq ITS
+sample_data(phylos_its)$Cluster <- as.factor(kmeans_its$cluster)
 ```
 
-
-
 ```{r}
-p_kmeans <- plot_ordination(ps_16s, ord_pcoa, color = "Cluster")
-  geom_point(size = 2, alpha = 0.7) +
-  stat_ellipse(type = "norm", linetype = 2) + # Ajoute des ellipses de confiance
-  theme_bw() +
-  labs(title = "Beta-Diversité des levains (Bray-Curtis)", 
-       color = "Pays d'origine")
-
-print(p_kmeans)
-```
-
-
-```{r}
-
-#ten_samples <- sample_names(ps_rel)[1:10]
-
-random_ten_samples <- sample(sample_names(ps_16s), 10)
-
-ps_subset <- prune_samples(random_ten_samples, ps_16s)
-
-# 1. On agglomère au niveau du Genre (pour simplifier)
-ps_genus <- tax_glom(ps_subset, taxrank = "Genus")
-
-# 2. On transforme en abondance relative (pourcentage)
-ps_rel <- transform_sample_counts(ps_genus, function(x) x / sum(x))
-
-# 3. On garde seulement les Top 10 Genres les plus abondants au total
-top10 <- names(sort(taxa_sums(ps_rel), decreasing = TRUE))[1:10]
-ps_top10 <- prune_taxa(top10, ps_rel)
-
-# 4. Conversion en dataframe pour ggplot
-df_top10 <- psmelt(ps_top10)
-
-# 5. Graphique
-p1 <- ggplot(df_top10, aes(x = Sample, y = Abundance, fill = Genus)) +
-  geom_bar(stat = "identity") +
-  theme_minimal() +
-  labs(title = "Composition bactérienne (Top 10 Genres)", y = "Abondance Relative") +
-  theme(axis.text.x = element_blank(), # On cache les noms des samples car illisibles (500 samples)
-        axis.ticks.x = element_blank())
-
-print(p1)
-```
-
-Faires des cluster (unsupervised faire avec differents k)
-représenter 5 ou 10 random sample par cluster 
-
-```{r}
-pcoa_coords <- ord_pcoa$vectors[, 1:2]
-
 library(ggplot2)
 
-# Tester de 2 à 10 clusters
-wss <- sapply(2:10, function(k) {
-  kmeans(pcoa_coords, centers = k, nstart = 25)$tot.withinss
-})
+# --- Fonction utilitaire pour calculer le WSS ---
+calculate_wss_df <- function(coordinates, max_k = 10) {
+  wss <- numeric(max_k)
+  for (k in 1:max_k) {
+    set.seed(42) # Pour la reproductibilité
+    # On calcule le k-means pour k clusters
+    km_res <- kmeans(coordinates, centers = k, nstart = 25, iter.max = 100)
+    # On stocke la somme des carrés intra-cluster (Total Within Sum of Squares)
+    wss[k] <- km_res$tot.withinss
+  }
+  return(data.frame(k = 1:max_k, wss = wss))
+}
 
-# Créer un petit dataframe pour le graphique "Elbow"
-elbow_df <- data.frame(k = 2:10, wss = wss)
+# --- 1. Préparation des données (au cas où) ---
+# On s'assure d'avoir les coordonnées basées sur les axes retenus précédemment
+# (Si les objets coords_16s/its existent déjà, cette étape est redondante mais sécurisante)
+coords_16s <- pcoa_16s$vectors[, 1:n_axes_16s]
+coords_its <- pcoa_its$vectors[, 1:n_axes_its]
 
-# Graphique de l'éboulis
-ggplot(elbow_df, aes(x = k, y = wss)) +
-  geom_line() + geom_point() +
-  theme_minimal() +
-  labs(title = "Elbow plot)",
-       x = "Nombre de clusters (k)",
-       y = "Somme des carrés (WSS)")
-```
+# --- 2. Calcul des Elbows ---
 
+# Pour le 16S
+elbow_data_16s <- calculate_wss_df(coords_16s, max_k = 10)
 
-Calculer north coord pour chaqyue samplle corrélé avec bdiversité
+# Pour l'ITS
+elbow_data_its <- calculate_wss_df(coords_its, max_k = 10)
 
-```{r}
-# 1. Calcul de l'ordination (PCoA avec distance Bray-Curtis)
-ord_pcoa <- ordinate(ps_16s, method = "PCoA", distance = "bray")
+# --- 3. Création des graphiques ---
 
-# 2. Plot
-p2 <- plot_ordination(ps_16s, ord_pcoa, color = "Country") + # Assure-toi que la colonne s'appelle bien "Country" dans metadata
-  geom_point(size = 2, alpha = 0.7) +
-  stat_ellipse(type = "norm", linetype = 2) + # Ajoute des ellipses de confiance
+# Plot 16S
+p_elbow_16s <- ggplot(elbow_data_16s, aes(x = k, y = wss)) +
+  geom_line(color = "steelblue", size = 1) +
+  geom_point(color = "steelblue", size = 3) +
+  scale_x_continuous(breaks = 1:10) +
   theme_bw() +
-  labs(title = "Beta-Diversité des levains (Bray-Curtis)", 
-       color = "Pays d'origine")
+  labs(title = "Elbow Plot - 16S",
+       subtitle = "Cherchez la cassure (le coude) de la courbe",
+       x = "Nombre de clusters (k)",
+       y = "Total Within Sum of Squares")
 
-print(p2)
+# Plot ITS
+p_elbow_its <- ggplot(elbow_data_its, aes(x = k, y = wss)) +
+  geom_line(color = "darkorange", size = 1) +
+  geom_point(color = "darkorange", size = 3) +
+  scale_x_continuous(breaks = 1:10) +
+  theme_bw() +
+  labs(title = "Elbow Plot - ITS",
+       subtitle = "Cherchez la cassure (le coude) de la courbe",
+       x = "Nombre de clusters (k)",
+       y = "Total Within Sum of Squares")
+
+# --- 4. Affichage ---
+library(gridExtra) # Utile pour mettre les deux côte à côte, sinon affiche l'un après l'autre
+grid.arrange(p_elbow_16s, p_elbow_its, ncol = 2)
+```
+
+
+```{r}
+library(ggplot2)
+
+# --- Plot 16S ---
+p_kmeans_16s <- plot_ordination(phylos_16s, pcoa_16s, color = "Cluster") +
+  geom_point(size = 2, alpha = 0.7) +
+  stat_ellipse(type = "norm", linetype = 2) +
+  theme_bw() +
+  labs(title = "Beta-Diversité 16S (Bray-Curtis)", 
+       color = "Cluster 16S")
+
+# --- Plot ITS ---
+p_kmeans_its <- plot_ordination(phylos_its, pcoa_its, color = "Cluster") +
+  geom_point(size = 2, alpha = 0.7) +
+  stat_ellipse(type = "norm", linetype = 2) +
+  theme_bw() +
+  labs(title = "Beta-Diversité ITS (Bray-Curtis)", 
+       color = "Cluster ITS")
+
+# Affichage
+print(p_kmeans_16s)
+print(p_kmeans_its)
 ```
 
 ```{r}
-# --- Étape C améliorée : Comparaison USA vs France (France au premier plan) ---
+library(plotly)
+library(phyloseq)
+library(dplyr)
 
-# # 1. On s'assure d'avoir filtré et calculé l'ordination (comme avant)
-# ps_fr_usa <- subset_samples(ps_16s, Country %in% c("France", "United States"))
-# ps_fr_usa <- prune_taxa(taxa_sums(ps_fr_usa) > 0, ps_fr_usa)
-# ord_fr_usa <- ordinate(ps_fr_usa, method = "PCoA", distance = "bray")
+# --- VISUALISATION 3D - 16S ---
 
-# 2. IMPORTANT : On extrait les données du plot au lieu de tracer directement
-# justDF = TRUE permet de récupérer un dataframe avec les axes (Axis.1, Axis.2)
-# plot_data <- plot_ordination(ps_fr_usa, ord_fr_usa, color = "Country", justDF = TRUE)
+# 1. Extraire les coordonnées 16S
+coord_3d_16s <- as.data.frame(pcoa_16s$vectors[, 1:3])
+colnames(coord_3d_16s) <- c("Axis1", "Axis2", "Axis3")
 
-plot_data <- plot_ordination(ps_16s, ord_pcoa, color = "Country", justDF = TRUE)
+# 2. Récupérer les métadonnées 16S
+meta_df_16s <- data.frame(sample_data(phylos_16s))
+meta_df_16s$SampleID <- rownames(meta_df_16s)
+coord_3d_16s$SampleID <- rownames(coord_3d_16s)
 
-# 3. On trie les données pour que la France soit en DERNIER
-plot_data_sorted <- plot_data %>% 
-  arrange(desc(Country)) 
+# 3. Fusionner
+plot_data_16s <- merge(coord_3d_16s, meta_df_16s, by = "SampleID")
 
-# 4. On trace le graphique manuellement avec ggplot
-p3 <- ggplot(plot_data_sorted, aes(x = Axis.1, y = Axis.2, color = Country)) +
-  geom_point(size = 3, alpha = 0.8) + # J'ai ajouté alpha (transparence) pour mieux voir les densités
-  scale_color_manual(values = c("France" = "#377eb8", "United States" = "#e41a1c")) + 
-  theme_classic() +
-  labs(title = "Comparaison structurelle : France vs USA",
-       x = "PCoA 1", # Tu peux personnaliser les noms d'axes ici
-       y = "PCoA 2")
+# 4. Créer le plot 16S
+p_3d_16s <- plot_ly(
+  data = plot_data_16s,
+  x = ~Axis1,
+  y = ~Axis2,
+  z = ~Axis3,
+  color = ~Cluster,          # Clusters calculés sur le 16S
+  colors = "Set1",
+  type = "scatter3d",
+  mode = "markers",
+  marker = list(size = 5, opacity = 0.8),
+  text = ~paste("Sample:", SampleID, "<br>Cluster 16S:", Cluster)
+) %>%
+  layout(
+    title = "Beta-Diversité 16S (Bray-Curtis) - 3D",
+    scene = list(
+      xaxis = list(title = "PCoA 1"),
+      yaxis = list(title = "PCoA 2"),
+      zaxis = list(title = "PCoA 3")
+    )
+  )
 
-print(p3)
 
-ggsave(here(path_figs,"p3.svg"), width=8, height=6)
+# --- VISUALISATION 3D - ITS ---
+
+# 1. Extraire les coordonnées ITS
+coord_3d_its <- as.data.frame(pcoa_its$vectors[, 1:3])
+colnames(coord_3d_its) <- c("Axis1", "Axis2", "Axis3")
+
+# 2. Récupérer les métadonnées ITS
+meta_df_its <- data.frame(sample_data(phylos_its))
+meta_df_its$SampleID <- rownames(meta_df_its)
+coord_3d_its$SampleID <- rownames(coord_3d_its)
+
+# 3. Fusionner
+plot_data_its <- merge(coord_3d_its, meta_df_its, by = "SampleID")
+
+# 4. Créer le plot ITS
+p_3d_its <- plot_ly(
+  data = plot_data_its,
+  x = ~Axis1,
+  y = ~Axis2,
+  z = ~Axis3,
+  color = ~Cluster,          # Clusters calculés sur l'ITS
+  colors = "Set1",           # Tu peux changer pour "Dark2" pour différencier visuellement
+  type = "scatter3d",
+  mode = "markers",
+  marker = list(size = 5, opacity = 0.8),
+  text = ~paste("Sample:", SampleID, "<br>Cluster ITS:", Cluster)
+) %>%
+  layout(
+    title = "Beta-Diversité ITS (Bray-Curtis) - 3D",
+    scene = list(
+      xaxis = list(title = "PCoA 1"),
+      yaxis = list(title = "PCoA 2"),
+      zaxis = list(title = "PCoA 3")
+    )
+  )
+
+# --- Affichage ---
+# Note : Dans RStudio, il faut les exécuter une par une pour voir l'interactivité
+p_3d_16s
+p_3d_its
 ```
 
 
-# --- Test différentes distances pour PCA ---
-
-```{r}
-ord_pcoa_bray <- ordinate(ps_16s, method = "PCoA", distance = "bray")
-
-plot_data <- plot_ordination(ps_16s, ord_pcoa_bray, color = "Country", justDF = TRUE)
-
-# Extraire les valeurs propres (eigenvalues)
-evals <- ord_pcoa_bray$values$Relative_eig
-
-# Calculer le pourcentage pour les deux premiers axes
-pc1 <- round(100 * evals[1], 1)
-pc2 <- round(100 * evals[2], 1)
-
-p4 <- ggplot(plot_data, aes(x = Axis.1, y = Axis.2, color = Country)) +
-  geom_point(size = 3, alpha = 0.8) + # J'ai ajouté alpha (transparence) pour mieux voir les densités
-  scale_color_manual(values = c("France" = "#377eb8", "United States" = "#e41a1c")) + 
-  theme_classic() +
-  labs(title = "Comparaison structurelle : France vs USA",
-       x = paste0("PCoA 1 [", pc1, "%]"), # Affiche par ex: PCoA 1 [12.5%]
-    y = paste0("PCoA 2 [", pc2, "%]"))
-
-print(p4)
-```
-```{r}
-# 1. Extraire la table d'abondance (ASV en lignes, Samples en colonnes)
-otu_tab <- as(otu_table(ps_16s), "matrix")
-
-# 2. Ajouter 1 pour éviter les zéros (pseudocount)
-otu_tab_plus1 <- otu_tab + 1
-
-# 3. Calculer la CLR manuellement
-# Pour chaque échantillon (colonne), on fait log(x / moyenne_géométrique(x))
-clr_tab <- apply(otu_tab_plus1, 2, function(x) {
-  log(x) - mean(log(x))
-})
-
-# 4. Réinjecter dans un nouvel objet phyloseq
-ps_clr_manual <- ps_16s
-otu_table(ps_clr_manual) <- otu_table(clr_tab, taxa_are_rows = TRUE)
-
-# 5. Faire l'ordination (Distance Euclidienne sur données CLR = Aitchison)
-ord_pcoa_aitchison <- ordinate(ps_clr_manual, method = "PCoA", distance = "euclidean")
-
-plot_data <- plot_ordination(ps_16s, ord_pcoa_aitchison, color = "Country", justDF = TRUE)
-
-# Extraire les valeurs propres (eigenvalues)
-evals <- ord_pcoa_aitchison$values$Relative_eig
-
-# Calculer le pourcentage pour les deux premiers axes
-pc1 <- round(100 * evals[1], 1)
-pc2 <- round(100 * evals[2], 1)
-
-p6 <- ggplot(plot_data, aes(x = Axis.1, y = Axis.2, color = Country)) +
-  geom_point(size = 3, alpha = 0.8) + # J'ai ajouté alpha (transparence) pour mieux voir les densités
-  scale_color_manual(values = c("France" = "#377eb8", "United States" = "#e41a1c")) + 
-  theme_classic() +
-  labs(title = "Comparaison structurelle : France vs USA",
-       x = paste0("PCoA 1 [", pc1, "%]"), # Affiche par ex: PCoA 1 [12.5%]
-    y = paste0("PCoA 2 [", pc2, "%]"))
-
-print(p6)
-```
 
 
 ```{r}
 library(phyloseq)
 library(ggplot2)
-library(ggdendro)
-library(patchwork)
+library(dplyr)
+library(tidyr)
 
-# --- ÉTAPE 1 : Définir les clusters ---
-dist_mat <- phyloseq::distance(ps_16s, method = "bray")
-hc <- hclust(dist_mat, method = "average") # method = ward.D2 ou average
-clusters <- cutree(hc, k = 4)
+# ==============================================================================
+# PARTIE 1 : ANALYSE 16S
+# ==============================================================================
 
-# --- ÉTAPE 2 : Fusion MANUELLE par cluster (sans merge_samples) ---
-# Extraire la table OTU
-otu_mat <- as.matrix(otu_table(ps_16s))
+# --- A. Préparation des données 16S ---
+# Agglomération au rang Genre
+ps_genus_16s <- tax_glom(phylos_16s, taxrank = "Genus")
+# Transformation en relative (optionnel si tu normalises après, mais bonne pratique)
+ps_genus_rel_16s <- transform_sample_counts(ps_genus_16s, function(x) x / sum(x))
 
-# Si les samples sont en colonnes, transposer si nécessaire
-if (!taxa_are_rows(ps_16s)) {
-  otu_mat <- t(otu_mat)
+# Sélection du Top 8 16S
+top_genera_16s <- names(sort(taxa_sums(ps_genus_rel_16s), decreasing = TRUE)[1:8])
+ps_top8_16s <- prune_taxa(top_genera_16s, ps_genus_rel_16s)
+
+# Melt (transformation en tableau long)
+# psmelt récupère automatiquement la colonne "Cluster" présente dans sample_data
+df_taxa_16s <- psmelt(ps_top8_16s)
+
+# --- B. Normalisation "Intra-Genre" 16S ---
+df_taxa_norm_16s <- df_taxa_16s %>%
+  group_by(Genus) %>%
+  mutate(Normalized_Abundance = Abundance / max(Abundance)) %>%
+  ungroup()
+
+# --- C. Fusion avec les coordonnées PCoA 16S ---
+# On récupère les coords calculées précédemment (pcoa_16s)
+pcoa_coords_16s <- as.data.frame(pcoa_16s$vectors[, 1:2])
+colnames(pcoa_coords_16s) <- c("Axis.1", "Axis.2") # Renommage standard
+pcoa_coords_16s$Sample <- rownames(pcoa_coords_16s)
+
+# Fusion
+df_plot_16s <- left_join(df_taxa_norm_16s, pcoa_coords_16s, by = "Sample")
+
+# --- D. Visualisation 16S ---
+p_drivers_16s <- ggplot(df_plot_16s, aes(x = Axis.1, y = Axis.2)) +
+  stat_ellipse(aes(group = Cluster), color = "grey60", linetype = "dashed", alpha = 0.4) +
+  geom_point(aes(color = Normalized_Abundance), size = 2, alpha = 0.9) +
+  facet_wrap(~Genus, ncol = 4) +
+  scale_color_viridis_c(option = "plasma", 
+                        name = "Intensité Relative\n(Scaled 0-1)",
+                        breaks = c(0, 0.5, 1),
+                        labels = c("Absent", "Moyen", "Max obs.")) +
+  theme_bw() +
+  labs(title = "16S : Distribution des Genres majeurs (Normalisée)",
+       subtitle = "Projection sur PCoA 16S",
+       x = "PCoA 1", y = "PCoA 2")
+
+
+# ==============================================================================
+# PARTIE 2 : ANALYSE ITS
+# ==============================================================================
+
+# --- A. Préparation des données ITS ---
+ps_genus_its <- tax_glom(phylos_its, taxrank = "Genus")
+ps_genus_rel_its <- transform_sample_counts(ps_genus_its, function(x) x / sum(x))
+
+# Sélection du Top 8 ITS
+top_genera_its <- names(sort(taxa_sums(ps_genus_rel_its), decreasing = TRUE)[1:8])
+ps_top8_its <- prune_taxa(top_genera_its, ps_genus_rel_its)
+
+# Melt
+df_taxa_its <- psmelt(ps_top8_its)
+
+# --- B. Normalisation "Intra-Genre" ITS ---
+df_taxa_norm_its <- df_taxa_its %>%
+  group_by(Genus) %>%
+  mutate(Normalized_Abundance = Abundance / max(Abundance)) %>%
+  ungroup()
+
+# --- C. Fusion avec les coordonnées PCoA ITS ---
+# Attention : on utilise bien pcoa_its ici
+pcoa_coords_its <- as.data.frame(pcoa_its$vectors[, 1:2])
+colnames(pcoa_coords_its) <- c("Axis.1", "Axis.2")
+pcoa_coords_its$Sample <- rownames(pcoa_coords_its)
+
+# Fusion
+df_plot_its <- left_join(df_taxa_norm_its, pcoa_coords_its, by = "Sample")
+
+# --- D. Visualisation ITS ---
+p_drivers_its <- ggplot(df_plot_its, aes(x = Axis.1, y = Axis.2)) +
+  stat_ellipse(aes(group = Cluster), color = "grey60", linetype = "dashed", alpha = 0.4) +
+  geom_point(aes(color = Normalized_Abundance), size = 2, alpha = 0.9) +
+  facet_wrap(~Genus, ncol = 4) +
+  scale_color_viridis_c(option = "viridis", # J'ai changé 'plasma' en 'viridis' pour varier, remets plasma si tu préfères
+                        name = "Intensité Relative\n(Scaled 0-1)",
+                        breaks = c(0, 0.5, 1),
+                        labels = c("Absent", "Moyen", "Max obs.")) +
+  theme_bw() +
+  labs(title = "ITS : Distribution des Genres majeurs (Normalisée)",
+       subtitle = "Projection sur PCoA ITS",
+       x = "PCoA 1", y = "PCoA 2")
+
+# ==============================================================================
+# AFFICHAGE
+# ==============================================================================
+print(p_drivers_16s)
+print(p_drivers_its)
+```
+```{r}
+library(dplyr)
+library(tibble)
+
+# --- Fonction CORRIGÉE : Trouver les ASV corrélés aux axes ---
+get_pcoa_drivers <- function(phyloseq_obj, pcoa_obj, n_top = 10) {
+  
+  # 1. Récupérer la table d'OTU normalisée
+  ps_rel <- transform_sample_counts(phyloseq_obj, function(x) x / sum(x))
+  otu_mat <- as(otu_table(ps_rel), "matrix")
+  if(taxa_are_rows(ps_rel)) otu_mat <- t(otu_mat) 
+  
+  # 2. Récupérer les coordonnées
+  axes_coords <- pcoa_obj$vectors[, 1:2]
+  colnames(axes_coords) <- c("Axis1", "Axis2")
+  
+  # 3. Calculer les corrélations
+  cor_res <- data.frame(
+    ASV = colnames(otu_mat), # Ici "ASV" contient l'identifiant (ex: ASV1)
+    Cor_Axis1 = numeric(ncol(otu_mat)),
+    Cor_Axis2 = numeric(ncol(otu_mat)),
+    stringsAsFactors = FALSE
+  )
+  
+  for(i in 1:ncol(otu_mat)) {
+    cor_res$Cor_Axis1[i] <- cor(otu_mat[, i], axes_coords[, "Axis1"], method = "spearman")
+    cor_res$Cor_Axis2[i] <- cor(otu_mat[, i], axes_coords[, "Axis2"], method = "spearman")
+  }
+  
+  # 4. Score d'importance
+  cor_res$Importance <- (abs(cor_res$Cor_Axis1) + abs(cor_res$Cor_Axis2)) / 2
+  
+  # 5. Ajouter la taxonomie (CORRECTION ICI)
+  tax_df <- as.data.frame(tax_table(phyloseq_obj))
+  
+  # On crée une colonne explicite pour l'ID, différente de la colonne "ASV" existante
+  tax_df$ASV_ID_JOIN <- rownames(tax_df)
+  
+  # On fait la jointure entre "ASV" (de cor_res) et "ASV_ID_JOIN" (de tax_df)
+  res_final <- left_join(cor_res, tax_df, by = c("ASV" = "ASV_ID_JOIN")) %>%
+    arrange(desc(Importance)) %>%
+    head(n_top)
+  
+  return(res_final)
 }
 
-# Créer une matrice fusionnée (somme par cluster)
-cluster_names <- paste0("Cluster_", 1:4)
-otu_merged <- matrix(0, nrow = nrow(otu_mat), ncol = 4)
-rownames(otu_merged) <- rownames(otu_mat)
-colnames(otu_merged) <- cluster_names
+# --- APPLICATION AU 16S ---
+ps_16s_filt <- prune_taxa(taxa_sums(phylos_16s) > 0, phylos_16s) 
+drivers_16s <- get_pcoa_drivers(ps_16s_filt, pcoa_16s, n_top = 10)
 
-for (i in 1:4) {
-  samples_in_cluster <- which(clusters == i)
-  otu_merged[, i] <- rowSums(otu_mat[, samples_in_cluster, drop = FALSE])
-}
+print("--- TOP 10 DRIVERS 16S ---")
+# On sélectionne les colonnes intéressantes pour l'affichage
+print(drivers_16s %>% select(ASV, Genus, Species, Cor_Axis1, Cor_Axis2))
 
-# Créer le nouvel objet phyloseq
-ps_merged <- phyloseq(
-  otu_table(otu_merged, taxa_are_rows = TRUE),
-  tax_table(ps_16s),
-  sample_data(data.frame(
-    Cluster = factor(cluster_names),
-    row.names = cluster_names
-  ))
-)
+# --- APPLICATION À L'ITS ---
+ps_its_filt <- prune_taxa(taxa_sums(phylos_its) > 0, phylos_its)
+drivers_its <- get_pcoa_drivers(ps_its_filt, pcoa_its, n_top = 10)
 
-# Transformation en abondance relative
-ps_merged_rel <- transform_sample_counts(ps_merged, function(x) x / sum(x))
+print("--- TOP 10 DRIVERS ITS ---")
+print(drivers_its %>% select(ASV, Genus, Species, Cor_Axis1, Cor_Axis2))
+```
 
-# --- ÉTAPE 3 : Dendrogramme ---
-dist_merged <- phyloseq::distance(ps_merged_rel, method = "bray")
-hc_merged <- hclust(dist_merged, method = "average") # method = ward.D2 ou average
-dendro_data <- dendro_data(as.dendrogram(hc_merged))
+```{r}
+library(phyloseq)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
 
-p_tree <- ggplot(segment(dendro_data)) +
-  geom_segment(aes(x = x, y = y, xend = xend, yend = yend)) +
-  theme_void() +
-  theme(plot.margin = margin(b = 0, unit = "cm"))
+# ==============================================================================
+# PARTIE 1 : ANALYSE 16S (CORRIGÉE)
+# ==============================================================================
 
-# --- ÉTAPE 4 : Barplot ---
-ps_genus <- tax_glom(ps_merged_rel, taxrank = "Genus", NArm = TRUE)
-top10 <- names(sort(taxa_sums(ps_genus), decreasing = TRUE))[1:10]
-ps_top10 <- prune_taxa(top10, ps_genus)
-df_top10 <- psmelt(ps_top10)
+# --- A. Préparation des données 16S ---
+# 1. On récupère la liste des ASV Drivers
+target_asvs_16s <- drivers_16s$ASV
 
-order_leaves <- dendro_data$labels$label[order(dendro_data$labels$x)]
-df_top10$Sample <- factor(df_top10$Sample, levels = order_leaves)
-df_top10$Genus <- as.character(df_top10$Genus)
-df_top10$Genus[is.na(df_top10$Genus)] <- "Non classifié"
+# 2. On filtre l'objet ORIGINAL pour ne garder QUE ces ASV
+# Note : On utilise les comptes bruts ici, c'est plus sûr pour la normalisation 0-1 qui suit.
+ps_drivers_16s <- prune_taxa(target_asvs_16s, phylos_16s)
 
-p_bar <- ggplot(df_top10, aes(x = Sample, y = Abundance, fill = Genus)) +
-  geom_bar(stat = "identity", width = 0.8) +
-  scale_fill_brewer(palette = "Paired") +
-  labs(y = "Abondance Relative", x = "Cluster") +
-  theme_minimal() +
-  theme(
-    legend.position = "bottom",
-    axis.text.x = element_text(size = 12, face = "bold"),
-    plot.margin = margin(t = 0, unit = "cm")
+# 3. Check de sécurité : est-ce qu'il reste des données ?
+if(ntaxa(ps_drivers_16s) == 0) stop("Erreur 16S : Aucun ASV sélectionné n'est présent dans l'objet phyloseq.")
+
+# 4. Melt
+df_taxa_16s <- psmelt(ps_drivers_16s)
+
+# 5. Création d'une étiquette lisible
+df_taxa_16s <- df_taxa_16s %>%
+  mutate(Species_Clean = ifelse(is.na(Species), "sp.", Species),
+         # On s'assure que Genus est un caractère pour le paste
+         Genus_Clean = as.character(ifelse(is.na(Genus), "Unknown", Genus)),
+         PlotLabel = paste(Genus_Clean, Species_Clean, "\n(", OTU, ")", sep = ""))
+
+# --- B. Normalisation "Intra-ASV" 16S SECURISEE ---
+df_taxa_norm_16s <- df_taxa_16s %>%
+  group_by(PlotLabel) %>%
+  # --- LE FIX EST ICI ---
+  # 1. On calcule le max, en gérant les NA éventuels
+  mutate(Max_Abundance = max(Abundance, na.rm = TRUE)) %>%
+  # 2. Si le max est 0 ou NA, la normalisation vaut 0. Sinon, on divise.
+  mutate(Normalized_Abundance = ifelse(Max_Abundance == 0 | is.na(Max_Abundance), 
+                                       0, 
+                                       Abundance / Max_Abundance)) %>%
+  ungroup()
+
+# --- DIAGNOSTIC 16S (Regarde la console !) ---
+print("--- DIAGNOSTIC 16S : Résumé de Normalized_Abundance ---")
+# Si tu vois "Min.: 0.00, Max.: 1.00" et peu de NA's, c'est bon.
+print(summary(df_taxa_norm_16s$Normalized_Abundance)) 
+
+
+# --- C. Fusion avec les coordonnées PCoA 16S ---
+pcoa_coords_16s <- as.data.frame(pcoa_16s$vectors[, 1:2])
+colnames(pcoa_coords_16s) <- c("Axis.1", "Axis.2")
+pcoa_coords_16s$Sample <- rownames(pcoa_coords_16s)
+
+df_plot_16s <- left_join(df_taxa_norm_16s, pcoa_coords_16s, by = "Sample")
+
+# --- D. Visualisation 16S ---
+p_drivers_16s <- ggplot(df_plot_16s, aes(x = Axis.1, y = Axis.2)) +
+  # Ellipses
+  stat_ellipse(aes(group = Cluster), color = "grey60", linetype = "dashed", alpha = 0.4) +
+  # Points : Note le na.rm = TRUE pour éviter les warnings sur les points gris
+  geom_point(aes(color = Normalized_Abundance), size = 2, alpha = 0.9, na.rm = TRUE) +
+  # Facettes
+  facet_wrap(~PlotLabel, ncol = 4) + 
+  # Couleurs
+  scale_color_viridis_c(option = "plasma", 
+                        name = "Intensité Relative\n(Scaled 0-1)",
+                        breaks = c(0, 0.5, 1),
+                        labels = c("Absent", "Moyen", "Max obs."),
+                        na.value = "grey90") + # Les vrais NA seront gris clair
+  theme_bw() +
+  labs(title = "16S : Distribution des 'Drivers' (Top ASV corrélés)",
+       subtitle = "Ces bactéries structurent la PCoA",
+       x = "PCoA 1", y = "PCoA 2")
+
+
+# ==============================================================================
+# PARTIE 2 : ANALYSE ITS (CORRIGÉE)
+# ==============================================================================
+
+# --- A. Préparation des données ITS ---
+target_asvs_its <- drivers_its$ASV
+ps_drivers_its <- prune_taxa(target_asvs_its, phylos_its)
+
+if(ntaxa(ps_drivers_its) == 0) stop("Erreur ITS : Aucun ASV sélectionné n'est présent.")
+
+df_taxa_its <- psmelt(ps_drivers_its)
+
+df_taxa_its <- df_taxa_its %>%
+  mutate(Species_Clean = ifelse(is.na(Species), "sp.", Species),
+         Genus_Clean = as.character(ifelse(is.na(Genus), "Unknown", Genus)),
+         PlotLabel = paste(Genus_Clean, Species_Clean, "\n(", OTU, ")", sep = ""))
+
+# --- B. Normalisation ITS SECURISEE ---
+df_taxa_norm_its <- df_taxa_its %>%
+  group_by(PlotLabel) %>%
+  mutate(Max_Abundance = max(Abundance, na.rm = TRUE)) %>%
+  mutate(Normalized_Abundance = ifelse(Max_Abundance == 0 | is.na(Max_Abundance), 
+                                       0, 
+                                       Abundance / Max_Abundance)) %>%
+  ungroup()
+
+# --- DIAGNOSTIC ITS ---
+print("--- DIAGNOSTIC ITS : Résumé de Normalized_Abundance ---")
+print(summary(df_taxa_norm_its$Normalized_Abundance))
+
+# --- C. Fusion ITS ---
+pcoa_coords_its <- as.data.frame(pcoa_its$vectors[, 1:2])
+colnames(pcoa_coords_its) <- c("Axis.1", "Axis.2")
+pcoa_coords_its$Sample <- rownames(pcoa_coords_its)
+
+df_plot_its <- left_join(df_taxa_norm_its, pcoa_coords_its, by = "Sample")
+
+# --- D. Visualisation ITS ---
+p_drivers_its <- ggplot(df_plot_its, aes(x = Axis.1, y = Axis.2)) +
+  stat_ellipse(aes(group = Cluster), color = "grey60", linetype = "dashed", alpha = 0.4) +
+  geom_point(aes(color = Normalized_Abundance), size = 2, alpha = 0.9, na.rm = TRUE) +
+  facet_wrap(~PlotLabel, ncol = 4) +
+  scale_color_viridis_c(option = "viridis", 
+                        name = "Intensité Relative\n(Scaled 0-1)",
+                        breaks = c(0, 0.5, 1),
+                        labels = c("Absent", "Moyen", "Max obs."),
+                        na.value = "grey90") +
+  theme_bw() +
+  labs(title = "ITS : Distribution des 'Drivers' (Top ASV corrélés)",
+       subtitle = "Ces levures structurent la PCoA",
+       x = "PCoA 1", y = "PCoA 2")
+
+# ==============================================================================
+# AFFICHAGE
+# ==============================================================================
+print(p_drivers_16s)
+print(p_drivers_its)
+```
+
+
+
+```{r}
+library(vegan)
+library(dplyr)
+library(phyloseq)
+
+# --- 1. Sélection des variables à tester ---
+vars_to_test <- c("Country", "StorageLocBin", "WhoMadeBin", 
+                  "Starter.age.years", "FreqOpenedPerWeek", 
+                  "ContainerMaterial", "Temp")
+
+# --- 2. Préparation et Nettoyage des Métadonnées ---
+# On part des métadonnées contenues dans l'objet 16S (ce sont les mêmes pour l'ITS)
+meta_full <- as(sample_data(phylos_16s), "data.frame") %>%
+  select(all_of(vars_to_test))
+
+# Conversion des types (Important pour que la PERMANOVA sache quoi faire)
+meta_full <- meta_full %>%
+  mutate(
+    Country           = as.factor(Country),
+    StorageLocBin     = as.factor(StorageLocBin),
+    WhoMadeBin        = as.factor(WhoMadeBin),
+    ContainerMaterial = as.factor(ContainerMaterial),
+    Starter.age.years = as.numeric(Starter.age.years),
+    FreqOpenedPerWeek = as.numeric(FreqOpenedPerWeek),
+    Temp              = as.numeric(Temp)
   )
 
-# --- ÉTAPE 5 : Assemblage ---
-final_plot <- p_tree / p_bar + plot_layout(heights = c(1, 3))
-print(final_plot)
+# Le "Crash Test" des données manquantes
+n_before <- nrow(meta_full)
+meta_clean <- na.omit(meta_full) # On enlève les lignes avec au moins un NA
+n_after <- nrow(meta_clean)
+samples_kept <- rownames(meta_clean) # Liste des IDs survivants
+
+cat("--- RAPPORT DE NETTOYAGE ---\n")
+cat("Échantillons initiaux :", n_before, "\n")
+cat("Échantillons conservés (complets) :", n_after, "\n")
+cat("Perte :", n_before - n_after, "échantillons.\n")
+
+if ((n_before - n_after) > 50) {
+  cat("ALERTE : Beaucoup de données perdues ! Vérifiez vos variables.\n")
+}
+
+# --- 3. Alignement des Matrices de Distance ---
+
+# Pour le 16S
+# On transforme la distance en matrice classique pour pouvoir sélectionner les lignes/cols
+mat_16s_subset <- as.matrix(dist_mat_16s)[samples_kept, samples_kept]
+dist_clean_16s <- as.dist(mat_16s_subset)
+
+# Pour l'ITS
+mat_its_subset <- as.matrix(dist_mat_its)[samples_kept, samples_kept]
+dist_clean_its <- as.dist(mat_its_subset)
+
+# --- 4. Exécution de la PERMANOVA (adonis2) ---
+
+# PERMANOVA 16S
+cat("\n========================================\n")
+cat(" RÉSULTATS PERMANOVA - 16S (Bactéries)\n")
+cat("========================================\n")
+# by = "margin" teste l'effet unique de chaque variable (Type III sum of squares)
+permanova_16s <- adonis2(dist_clean_16s ~ ., data = meta_clean, permutations = 999, by = "margin")
+print(permanova_16s)
+
+# PERMANOVA ITS
+cat("\n========================================\n")
+cat(" RÉSULTATS PERMANOVA - ITS (Levures)\n")
+cat("========================================\n")
+permanova_its <- adonis2(dist_clean_its ~ ., data = meta_clean, permutations = 999, by = "margin")
+print(permanova_its)
 ```
+
+
+
+```{r}
+library(ggplot2)
+library(dplyr)
+
+# --- 1. Fonction pour nettoyer les résultats PERMANOVA ---
+prepare_permanova_plot <- function(permanova_res, dataset_name) {
+  df <- as.data.frame(permanova_res)
+  df$Variable <- rownames(df)
+  df$Percent <- df$R2 * 100
+  df$Dataset <- dataset_name # Pour distinguer 16S et ITS
+  
+  # On catégorise : Residual vs Métadonnées
+  df$Type <- ifelse(df$Variable == "Residual", "Non Expliqué (Biologique)", "Métadonnées")
+  
+  # On filtre la ligne "Total" qui vaut toujours 100% et écrase le reste
+  df <- df %>% filter(Variable != "Total")
+  
+  return(df)
+}
+
+# --- 2. Préparation des deux tableaux ---
+df_res_16s <- prepare_permanova_plot(permanova_16s, "16S (Bactéries)")
+df_res_its <- prepare_permanova_plot(permanova_its, "ITS (Levures)")
+
+# Fusion pour le graphique
+df_combined <- rbind(df_res_16s, df_res_its)
+
+# --- 3. Le Graphique Comparatif ---
+p_variance_combined <- ggplot(df_combined, aes(x = reorder(Variable, Percent), y = Percent, fill = Type)) +
+  
+  # Barres
+  geom_bar(stat = "identity", width = 0.7) +
+  
+  # Séparation 16S / ITS côte à côte
+  facet_wrap(~Dataset, scales = "free_x") + 
+  
+  # On tourne pour lire
+  coord_flip() +
+  
+  # Affichage des valeurs
+  geom_text(aes(label = paste0(round(Percent, 1), "%")), 
+            hjust = -0.1, size = 3, fontface = "bold") +
+  
+  # Couleurs
+  scale_fill_manual(values = c("Métadonnées" = "#66c2a5", "Non Expliqué (Biologique)" = "grey50")) +
+  
+  # Esthétique
+  theme_bw() +
+  labs(title = "Comparaison des sources de variation (16S vs ITS)",
+       subtitle = "La part de variance expliquée (R2) par chaque facteur",
+       y = "Pourcentage de variance expliquée (%)",
+       x = "",
+       fill = "Type de Facteur") +
+  
+  # Ajustement échelle pour laisser place au texte (jusqu'à 110% pour la marge)
+  ylim(0, 110) 
+
+print(p_variance_combined)
+```
+
+
 

@@ -7,7 +7,7 @@ title: "vdb_poster_plot_notebook"
 if (!requireNamespace('pak',quietly = TRUE))
   install.packages('pak')
 
-library_list <- c('tidyverse','phyloseq','ggplot2','here','dplyr','ggalluvial','plotly','umap','tibble','tidyr','vegan','phyloseq','stringr')
+library_list <- c('tidyverse','phyloseq','ggplot2','here','dplyr','ggalluvial','plotly','umap','tibble','tidyr','vegan','phyloseq','stringr','ggalluvial')
 
 if (!requireNamespace(library_list, quietly = TRUE))
   pak::pkg_install(library_list)
@@ -780,4 +780,74 @@ ggsave(
 ```
 
 
+```{r}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(gridExtra)
+library(svglite)
 
+prepare_rank_abundance_poster <- function(physeq_obj, title_label) {
+  # 1. taxo et top 6 global
+  tax_df <- as.data.frame(tax_table(physeq_obj)) %>%
+    mutate(
+      Genus_Clean = gsub("g__", "", as.character(Genus)),       # clean préfixes g__ et s__
+      Species_Clean = gsub("s__", "", as.character(Species)),
+      Full_Name = case_when(       # abréviation sélective, quand absence espèce : sp
+        is.na(Species_Clean) | Species_Clean == "" | grepl("sp", Species_Clean) ~ paste(Genus_Clean, "sp."),
+        TRUE ~ paste0(substr(Genus_Clean, 1, 1), ". ", Species_Clean)
+      ))
+  
+  # sélection des 6 ASV les plus abondants globalement
+  top_global_ids <- names(sort(taxa_sums(physeq_obj), decreasing = TRUE)[1:6])
+  tax_df$Temp_Name <- ifelse(rownames(tax_df) %in% top_global_ids, tax_df$Full_Name, "Autres")   # legende "autres"
+  species_names <- sort(setdiff(unique(tax_df$Temp_Name), "Autres"))   # sp par ordre alphabétique et "autres" à la fin
+  legend_levels <- c(species_names, "Autres")
+  tax_df$Legend_Name <- factor(tax_df$Temp_Name, levels = legend_levels)
+
+  # 2. calcul Ranks (top 10 par sample)
+  otu_mat <- as.matrix(otu_table(physeq_obj))
+  ranked_values <- apply(otu_mat, 2, function(x) sort(x, decreasing = TRUE)[1:10])
+  ranked_ids <- apply(otu_mat, 2, function(x) names(sort(x, decreasing = TRUE))[1:10])
+  
+  df_long <- bind_rows(lapply(1:ncol(otu_mat), function(i) {
+    data.frame(Rank = 1:10, Abundance = ranked_values[, i] * 100, ASV_ID = ranked_ids[, i])
+  })) %>%
+    left_join(tax_df %>% select(Legend_Name) %>% tibble::rownames_to_column("ASV_ID"), by = "ASV_ID")
+
+  # 3. palette de couleurs (Couleurs + Gris pour Autres)
+  my_colors <- setNames(c(scales::hue_pal()(length(species_names)), "#D3D3D3"), legend_levels)
+
+  # 4. graph final
+  ggplot(df_long, aes(x = as.factor(Rank), y = Abundance)) +
+    geom_boxplot(outlier.shape = NA, fill = "grey95", color = "grey40", size = 0.4, na.rm = TRUE) +
+    geom_jitter(aes(color = Legend_Name), width = 0.2, alpha = 0.4, size = 0.8, na.rm = TRUE) +
+    scale_color_manual(values = my_colors) +
+    scale_y_continuous(limits = c(0, 105), breaks = seq(0, 100, 25)) + 
+    theme_bw() +
+    labs(
+      title = title_label, 
+      x = "Rang d'abondance (Top 10 ASVs)", 
+      y = "Abondance relative (%)", 
+      color = "Espèces"
+    ) +
+    theme(
+      legend.text = element_text(face = "italic", size = 6.5),
+      legend.position = "right",
+      legend.key.size = unit(0.3, "cm"),
+      legend.margin = margin(l = -5),      
+      plot.title = element_text(size = 10, face = "bold"),
+      axis.title = element_text(size = 8.5, face = "plain"),
+      axis.text = element_text(size = 7.5),
+      plot.margin = margin(5, 5, 5, 5)
+    ) +
+    guides(color = guide_legend(ncol = 1))
+}
+
+p_rank_16s <- prepare_rank_abundance_poster(phylos_16s, "Bactéries (16S)")
+p_rank_its <- prepare_rank_abundance_poster(phylos_its, "Levures (ITS)")
+
+p_final <- grid.arrange(p_rank_16s, p_rank_its, ncol = 2, widths = c(1, 1))
+
+ggsave("../results/figures/figure_dominance_poster.svg", p_final, width = 8, height = 3)
+```

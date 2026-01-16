@@ -7,10 +7,24 @@ title: "vdb_poster_plot_notebook"
 if (!requireNamespace('pak',quietly = TRUE))
   install.packages('pak')
 
-library_list <- c('tidyverse','phyloseq','ggplot2','here','dplyr','ggalluvial','plotly','umap','tibble','tidyr','vegan','phyloseq','stringr','ggalluvial')
+library_list <- c('tidyverse','phyloseq','ggplot2','here','dplyr','umap','tibble','tidyr','vegan','stringr')
 
 if (!requireNamespace(library_list, quietly = TRUE))
   pak::pkg_install(library_list)
+
+#certaines libraries ne s'installent pas correctement avec pak
+if (!require("plotly", quietly = TRUE)) {
+  install.packages("plotly")
+}
+if (!require("ggalluvial", quietly = TRUE)) {
+  install.packages("ggalluvial")
+}
+if (!require("umap", quietly = TRUE)) {
+  install.packages("umap")
+}
+if (!require("gridExtra", quietly = TRUE)) {
+  install.packages("gridExtra")
+}
 ```
 
 ## Chargement des packages
@@ -850,4 +864,108 @@ p_rank_its <- prepare_rank_abundance_poster(phylos_its, "Levures (ITS)")
 p_final <- grid.arrange(p_rank_16s, p_rank_its, ncol = 2, widths = c(1, 1))
 
 ggsave("../results/figures/figure_dominance_poster.svg", p_final, width = 8, height = 3)
+```
+## Plot réseaux d'interactions (co-occurences)
+
+```{r}
+library(phyloseq)
+library(tidyverse)
+library(igraph)
+library(ggraph)
+
+# -- 1 : regroupement des ASVs par espèce --
+ps_16s_gp <- tax_glom(phylos_16s, taxrank = "Species")
+ps_its_gp <- tax_glom(phylos_its, taxrank = "Species")
+
+# -- 2: Filtre + standardisation --
+# filtrage : seuil 0.5 % abondance moyenne au minimum pour être un noeud du graphe
+keep_16s <- filter_taxa(ps_16s_gp, function(x) mean(x) > 0.005, TRUE)
+keep_its <- filter_taxa(ps_its_gp, function(x) mean(x) > 0.005, TRUE)
+
+# calcul poids des noeuds par rapport à l'abondance (pour taille des points ensuite)
+abund_16s <- taxa_sums(keep_16s) / nsamples(keep_16s)
+abund_its <- taxa_sums(keep_its) / nsamples(keep_its)
+total_abund <- c(abund_16s, abund_its)
+
+# -- 3 : Analyse des co-occurrences (Spearman) --
+# fusion des tables bacteries et fungi en une matrice pour l'analyse
+combined_otu <- cbind(as.data.frame(t(otu_table(keep_16s))), 
+                      as.data.frame(t(otu_table(keep_its))))
+cor_matrix <- cor(combined_otu, method = "spearman")
+
+#seuil de significativité (ignorer les relations faibles)
+cor_matrix[abs(cor_matrix) < 0.13] <- 0
+diag(cor_matrix) <- 0
+
+# -- 4 : Contruction du graphe --
+net <- graph_from_adjacency_matrix(cor_matrix, mode = "undirected", weighted = TRUE)
+E(net)$abs_weight <- abs(E(net)$weight) 
+
+# -- 5: Habillage taxo et métadonnées (taxo) --
+# nettoyage des noms : affichage propre type G. espece , ou Genre sp. (si l'espèce est absente), ou bien ignoré si appelation "cluster" "ASV" ou "unidentified"
+tax_all <- rbind(as.data.frame(tax_table(keep_16s)), as.data.frame(tax_table(keep_its))) %>%
+  mutate(
+    Genus = str_replace_all(Genus, "g__", ""),
+    Species = str_replace_all(Species, "s__", ""),
+    is_sp_invalid = is.na(Species) | Species == "" | str_detect(Species, "cluster|ASV|unidentified"),
+    is_gen_invalid = is.na(Genus) | Genus == "" | str_detect(Genus, "cluster|ASV|unidentified"),
+    Clean_Label = case_when(
+      !is_sp_invalid ~ paste0(substr(Genus, 1, 1), ". ", Species),
+      !is_gen_invalid ~ paste0(Genus, " sp."),
+      TRUE ~ NA_character_
+    )
+  )
+
+# Ajout des infos bio dans les noeuds 
+V(net)$Species_Label <- tax_all[V(net)$name, "Clean_Label"]
+V(net)$Kingdom <- ifelse(V(net)$name %in% taxa_names(keep_16s), "Bactérie", "Champignon")
+V(net)$Abundance <- total_abund[V(net)$name] # ajout abondance calculée
+net <- delete_vertices(net, which(is.na(V(net)$Species_Label))) #si noeud sans label, supprime
+
+# -- 6: Visualisation du graphe + ordre de légende + noms clarifiés --
+p_net_final <- ggraph(net, layout = 'fr', weights = abs_weight) + 
+  geom_edge_link(aes(color = weight > 0, alpha = abs(weight)), width = 1.2) +
+  geom_node_point(aes(color = Kingdom, size = Abundance)) +
+  geom_node_text(aes(label = Species_Label), repel = TRUE, 
+                 fontface = "italic", size = 3.2, bg.color = "white", bg.r = 0.1) +
+  
+  # le règne
+  scale_color_manual(values = c("Bactérie" = "#66C2AE", "Champignon" = "#FF9163"),
+                     name = "Règne",
+                     guide = guide_legend(order = 1)) +
+  
+  # type interaction
+  scale_edge_color_manual(values = c("TRUE" = "#2ca02c", "FALSE" = "#d62728"), 
+                          name = "Interaction", 
+                          labels = c("Exclusion (-)", "Co-occurrence (+)"),
+                          guide = guide_legend(order = 2)) +
+  
+  # abondance (taille points)
+  scale_size_continuous(range = c(2, 10), 
+                        name = "Abondance",
+                        guide = guide_legend(order = 3)) +
+  
+  scale_edge_alpha_continuous(name = "Force (|r|)",
+                              guide = guide_legend(order = 4)) +
+  
+  theme_graph() +
+  theme(
+    legend.position = "right",
+    legend.title = element_text(size = 9.5, face = "bold"), 
+    legend.text = element_text(size = 8),               
+    legend.key.size = unit(0.45, "cm"),                  
+    legend.margin = margin(2, 2, 2, 2),                 
+    legend.spacing.y = unit(0.15, "cm")                  
+  ) +
+  labs(subtitle = "Corrélation Spearman |r| > 0.13, micro-organismes filtrés à abond. > 0.5%")
+
+# Affichage et sauvegarde svg
+print(p_net_final)
+ggsave(
+  filename = "reseau_microbiome.svg", 
+  plot = p_net_final, 
+  width = 7, 
+  height = 5, 
+  device = "svg"
+)
 ```

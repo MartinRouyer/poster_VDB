@@ -800,6 +800,7 @@ library(ggplot2)
 library(dplyr)
 library(tidyr)
 library(gridExtra)
+library(grid)
 library(svglite)
 
 prepare_rank_abundance_poster <- function(physeq_obj, title_label) {
@@ -869,7 +870,9 @@ prepare_rank_abundance_poster <- function(physeq_obj, title_label) {
 # Affichage et sauvegarde svg
 p_top10_16s <- prepare_rank_abundance_poster(phylos_16s, "Bactéries (16S)")
 p_top10_its <- prepare_rank_abundance_poster(phylos_its, "Levures (ITS)")
-p_top10_final <- grid.arrange(p_top10_16s, p_top10_its, ncol = 2, widths = c(1, 1))
+p_top10_final <- grid.arrange(p_top10_16s, p_top10_its, ncol = 2, widths = c(1, 1), 
+                              top = textGrob("Structure de dominance et rangs d'abondance (top 10 ASVs) du microbiome (16S et ITS)", 
+                              gp = gpar(fontsize = 12, fontface = "bold")))
 
 ggsave(
   filename = here(path_figs, "p_top10_ASV_poster.svg"), 
@@ -966,7 +969,8 @@ p_net_final <- ggraph(net, layout = 'fr', weights = abs_weight) +
     legend.margin = margin(2, 2, 2, 2),                 
     legend.spacing.y = unit(0.15, "cm")                  
   ) +
-  labs(subtitle = "Corrélation Spearman |r| > 0.13, micro-organismes filtrés à abond. > 0.5%")
+  labs(title = "Réseau d'interactions bactéries et champignons (16S/ITS)",
+       subtitle = "Corrélation Spearman |r| > 0.13, micro-organismes filtrés à abond. > 0.5%")
 
 # Affichage et sauvegarde svg
 print(p_net_final)

@@ -246,52 +246,7 @@ print(p_kmeans_16s)
 print(p_kmeans_its)
 ```
 
-## Sankey plot : comparaison clustering 16s vs ITS 
-
-```{r}
-# --- Préparation des données ---
-
-# Extraction des clusters
-# 16S
-df_clus_16s <- data.frame(
-  SampleID = rownames(sample_data(phylos_16s)),
-  Cluster_16S = sample_data(phylos_16s)$Cluster
-)
-
-# ITS
-df_clus_its <- data.frame(
-  SampleID = rownames(sample_data(phylos_its)),
-  Cluster_ITS = sample_data(phylos_its)$Cluster
-)
-
-# Fusion des deux df
-df_alluvial <- inner_join(df_clus_16s, df_clus_its, by = "SampleID")
-
-df_alluvial <- df_alluvial %>%
-  group_by(Cluster_16S, Cluster_ITS) %>%
-  summarise(Freq = n(), .groups = "drop")
-
-# --- Plot Alluvial ---
-p_sankey <- ggplot(df_alluvial,
-       aes(y = Freq, axis1 = Cluster_16S, axis2 = Cluster_ITS)) +
-  
-  # Lien
-  geom_alluvium(aes(fill = Cluster_16S), width = 1/12, alpha = 0.7) +
-  
-  # Clusters
-  geom_stratum(width = 1/6, fill = "grey90", color = "grey") +
-  
-  # Texte clusters
-  geom_text(stat = "stratum", aes(label = after_stat(stratum)), size = 3) +
-  
-  theme_minimal() +
-  labs(title = "Correspondance entre clustering sur 16S et sur ITS",
-       y = "Nombre d'échantillons") +
-  theme(legend.position = "none")
-
-print(p_sankey)
-```
-## PCoA 3D plot
+## PCoA 3D plot (pour mieux distinguer les clusters + comprendre structure)
 
 ```{r}
 

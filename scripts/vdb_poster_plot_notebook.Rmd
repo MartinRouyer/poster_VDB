@@ -793,6 +793,7 @@ ggsave(
 
 ```
 
+## Plot abond. relatives + top 10 des ASVs 
 
 ```{r}
 library(ggplot2)
@@ -802,24 +803,26 @@ library(gridExtra)
 library(svglite)
 
 prepare_rank_abundance_poster <- function(physeq_obj, title_label) {
-  # 1. taxo et top 6 global
+  # -- 1 : taxo et top 6 global --
   tax_df <- as.data.frame(tax_table(physeq_obj)) %>%
     mutate(
-      Genus_Clean = gsub("g__", "", as.character(Genus)),       # clean préfixes g__ et s__
+      Genus_Clean = gsub("g__", "", as.character(Genus)),
       Species_Clean = gsub("s__", "", as.character(Species)),
-      Full_Name = case_when(       # abréviation sélective, quand absence espèce : sp
+      
+      Full_Name = case_when(
         is.na(Species_Clean) | Species_Clean == "" | grepl("sp", Species_Clean) ~ paste(Genus_Clean, "sp."),
         TRUE ~ paste0(substr(Genus_Clean, 1, 1), ". ", Species_Clean)
-      ))
-  
+      )
+    )
   # sélection des 6 ASV les plus abondants globalement
   top_global_ids <- names(sort(taxa_sums(physeq_obj), decreasing = TRUE)[1:6])
-  tax_df$Temp_Name <- ifelse(rownames(tax_df) %in% top_global_ids, tax_df$Full_Name, "Autres")   # legende "autres"
-  species_names <- sort(setdiff(unique(tax_df$Temp_Name), "Autres"))   # sp par ordre alphabétique et "autres" à la fin
+  tax_df$Temp_Name <- ifelse(rownames(tax_df) %in% top_global_ids, tax_df$Full_Name, "Autres")
+
+  species_names <- sort(setdiff(unique(tax_df$Temp_Name), "Autres"))
   legend_levels <- c(species_names, "Autres")
   tax_df$Legend_Name <- factor(tax_df$Temp_Name, levels = legend_levels)
 
-  # 2. calcul Ranks (top 10 par sample)
+  # -- 2: calcul Ranks (top 10 par sample) --
   otu_mat <- as.matrix(otu_table(physeq_obj))
   ranked_values <- apply(otu_mat, 2, function(x) sort(x, decreasing = TRUE)[1:10])
   ranked_ids <- apply(otu_mat, 2, function(x) names(sort(x, decreasing = TRUE))[1:10])
@@ -829,10 +832,10 @@ prepare_rank_abundance_poster <- function(physeq_obj, title_label) {
   })) %>%
     left_join(tax_df %>% select(Legend_Name) %>% tibble::rownames_to_column("ASV_ID"), by = "ASV_ID")
 
-  # 3. palette de couleurs (Couleurs + Gris pour Autres)
+  # -- 3: Palette de couleurs (Couleurs + Gris pour Autres) --
   my_colors <- setNames(c(scales::hue_pal()(length(species_names)), "#D3D3D3"), legend_levels)
 
-  # 4. graph final
+  # -- 4: Graphique final + legendes intégrées (haut droite)
   ggplot(df_long, aes(x = as.factor(Rank), y = Abundance)) +
     geom_boxplot(outlier.shape = NA, fill = "grey95", color = "grey40", size = 0.4, na.rm = TRUE) +
     geom_jitter(aes(color = Legend_Name), width = 0.2, alpha = 0.4, size = 0.8, na.rm = TRUE) +
@@ -846,24 +849,35 @@ prepare_rank_abundance_poster <- function(physeq_obj, title_label) {
       color = "Espèces"
     ) +
     theme(
-      legend.text = element_text(face = "italic", size = 6.5),
-      legend.position = "right",
-      legend.key.size = unit(0.3, "cm"),
-      legend.margin = margin(l = -5),      
+      legend.position = c(0.99, 0.99), 
+      legend.justification = c("right", "top"),
+      legend.box.background = element_blank(),
+      legend.spacing.y = unit(0, "mm"),
+      legend.background = element_rect(fill = alpha("white", 0.0)),
+      legend.key = element_blank(),
+      legend.text = element_text(face = "italic", size = 7),
+      legend.title = element_text(size = 8, face = "bold"),
+      legend.key.size = unit(0.25, "cm"),
       plot.title = element_text(size = 10, face = "bold"),
-      axis.title = element_text(size = 8.5, face = "plain"),
+      axis.title = element_text(size = 8.5),
       axis.text = element_text(size = 7.5),
       plot.margin = margin(5, 5, 5, 5)
     ) +
     guides(color = guide_legend(ncol = 1))
 }
 
-p_rank_16s <- prepare_rank_abundance_poster(phylos_16s, "Bactéries (16S)")
-p_rank_its <- prepare_rank_abundance_poster(phylos_its, "Levures (ITS)")
+# Affichage et sauvegarde svg
+p_top10_16s <- prepare_rank_abundance_poster(phylos_16s, "Bactéries (16S)")
+p_top10_its <- prepare_rank_abundance_poster(phylos_its, "Levures (ITS)")
+p_top10_final <- grid.arrange(p_top10_16s, p_top10_its, ncol = 2, widths = c(1, 1))
 
-p_final <- grid.arrange(p_rank_16s, p_rank_its, ncol = 2, widths = c(1, 1))
+ggsave(
+  filename = here(path_figs, "p_top10_ASV_poster.svg"), 
+  plot = p_top10_final, 
+  width = 8, 
+  height = 3, 
+  device = "svg")
 
-ggsave("../results/figures/figure_dominance_poster.svg", p_final, width = 8, height = 3)
 ```
 ## Plot réseaux d'interactions (co-occurences)
 
@@ -928,26 +942,21 @@ p_net_final <- ggraph(net, layout = 'fr', weights = abs_weight) +
   geom_node_point(aes(color = Kingdom, size = Abundance)) +
   geom_node_text(aes(label = Species_Label), repel = TRUE, 
                  fontface = "italic", size = 3.2, bg.color = "white", bg.r = 0.1) +
-  
   # le règne
   scale_color_manual(values = c("Bactérie" = "#66C2AE", "Champignon" = "#FF9163"),
                      name = "Règne",
                      guide = guide_legend(order = 1)) +
-  
   # type interaction
   scale_edge_color_manual(values = c("TRUE" = "#2ca02c", "FALSE" = "#d62728"), 
                           name = "Interaction", 
                           labels = c("Exclusion (-)", "Co-occurrence (+)"),
                           guide = guide_legend(order = 2)) +
-  
   # abondance (taille points)
   scale_size_continuous(range = c(2, 10), 
                         name = "Abondance",
                         guide = guide_legend(order = 3)) +
-  
   scale_edge_alpha_continuous(name = "Force (|r|)",
                               guide = guide_legend(order = 4)) +
-  
   theme_graph() +
   theme(
     legend.position = "right",
@@ -962,7 +971,7 @@ p_net_final <- ggraph(net, layout = 'fr', weights = abs_weight) +
 # Affichage et sauvegarde svg
 print(p_net_final)
 ggsave(
-  filename = "reseau_microbiome.svg", 
+  filename = here(path_figs, "p_reseau_inter_bacteria_yeasts.svg"), 
   plot = p_net_final, 
   width = 7, 
   height = 5, 

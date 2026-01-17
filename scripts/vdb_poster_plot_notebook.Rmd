@@ -7,12 +7,15 @@ title: "vdb_poster_plot_notebook"
 if (!requireNamespace('pak',quietly = TRUE))
   install.packages('pak')
 
-library_list <- c('tidyverse','phyloseq','ggplot2','here','dplyr','umap','tibble','tidyr','vegan','stringr')
+library_list <- c('tidyverse','phyloseq','ggplot2','here','dplyr','umap','tibble','tidyr','vegan','stringr','grid','gridExtra','svglite','igraph')
 
 if (!requireNamespace(library_list, quietly = TRUE))
   pak::pkg_install(library_list)
 
-#certaines libraries ne s'installent pas correctement avec pak
+if (!requireNamespace(library_list, quietly = TRUE))
+  install.packages(library_list)
+
+
 if (!require("plotly", quietly = TRUE)) {
   install.packages("plotly")
 }
@@ -24,6 +27,9 @@ if (!require("umap", quietly = TRUE)) {
 }
 if (!require("gridExtra", quietly = TRUE)) {
   install.packages("gridExtra")
+}
+if (!require("ggraph", quietly = TRUE)) {
+  install.packages("ggraph")
 }
 ```
 
@@ -43,6 +49,11 @@ library(tidyr)
 library(vegan)
 library(phyloseq)
 library(stringr)
+library(ggraph)
+library(gridExtra)
+library(grid)
+library(svglite)
+library(igraph)
 ```
 
 ## Chargement des données
@@ -68,7 +79,11 @@ ab_its_df <- read.csv(here(path_data, "sourdough_tab_ITS.csv"), row.names = 1)
 tax_its_df <- read.csv(here(path_data, "sourdough_tax_ITS.csv"), row.names = 1)
 ```
 
-## Nettoyage et création objets phyloseq
+# Nettoyage et création objets phyloseq
+
+- Renommer les colonnes de la taxonomy avec les niveau d'organisation correspondants
+- Verifier la concordances des echantillons entre les deux modalités (16s et ITS)
+- Créer des objets phyloseq pour chaque modalité avec la matrice d'abondance,la taxonomie, ainsi que les métadonnées des échantillons.
 
 ```{r}
 # --- Nettoyage et Renommage de la Taxonomie ---
@@ -131,7 +146,15 @@ print("--- Résumé ITS ---")
 print(phylos_its)
 ```
 
-## PCoA
+# PCoA
+
+Objectif : Réduire les dimensions de notre jeux de données pour des futurs représentations graphiques et pour analyser la structure des données
+Différente de PCA car elle regroupe les points en fonction des ASV commun et ne prend pas en compte les ASV absent entre echantillons
+
+- Calculer une matrice de distance (Bray-Curtis)
+- Calculer la PCoA
+- Recuperer n axes capturant > 75% de la variance totale
+- Clustering avec Kmeans
 
 ```{r}
 # --- PCoA 16S ---
@@ -172,6 +195,8 @@ sample_data(phylos_its)$Cluster <- as.factor(kmeans_its$cluster)
 
 ## Elbow plot
 
+Objectif : Evaluer le nombre de cluster optiamal pour chaque PCoA
+
 ```{r}
 # --- Fonction utilitaire pour calculer le WSS ---
 calculate_wss_df <- function(coordinates, max_k = 10) {
@@ -183,11 +208,6 @@ calculate_wss_df <- function(coordinates, max_k = 10) {
   }
   return(data.frame(k = 1:max_k, wss = wss))
 }
-
-# --- 1. Préparation des données (au cas où) ---
-# On s'assure d'avoir les coordonnées basées sur les axes retenus précédemment
-coords_16s <- pcoa_16s$vectors[, 1:n_axes_16s]
-coords_its <- pcoa_its$vectors[, 1:n_axes_its]
 
 # --- Calcul des Elbows ---
 
@@ -226,20 +246,20 @@ print(p_elbow_its)
 ## PCoA 2D plot
 
 ```{r}
-# --- Plot 16S ---
+# 16S
 p_kmeans_16s <- plot_ordination(phylos_16s, pcoa_16s, color = "Cluster") +
   geom_point(size = 2, alpha = 0.7) +
   stat_ellipse(type = "norm", linetype = 2) +
   theme_bw() +
-  labs(title = "Beta-Diversité 16S (distance = Bray-Curtis)", 
+  labs(title = "PCoA 16S (distance = Bray-Curtis)", 
        color = "Cluster 16S")
 
-# --- Plot ITS ---
+# ITS
 p_kmeans_its <- plot_ordination(phylos_its, pcoa_its, color = "Cluster") +
   geom_point(size = 2, alpha = 0.7) +
   stat_ellipse(type = "norm", linetype = 2) +
   theme_bw() +
-  labs(title = "Beta-Diversité ITS (distance = Bray-Curtis)", 
+  labs(title = "PCoA ITS (distance = Bray-Curtis)", 
        color = "Cluster ITS")
 
 print(p_kmeans_16s)
@@ -330,6 +350,8 @@ p_3d_its
 
 ## UMAP
 
+Objectif : Compresser les axes de la PCoA pour une représentation 2D des données d'abondances
+
 ```{r, fig.width=5, fig.height=4}
 
 # --- Fonction : calcul et formatage UMAP vers un df pour ggplot ---
@@ -338,11 +360,11 @@ run_umap_phyloseq <- function(phyloseq_obj, n_neighbors = 30, min_dist = 0.6) {
   # 1. Préparation des données : Normalisation Relative
   ps_rel <- transform_sample_counts(phyloseq_obj, function(x) x / sum(x))
   
-  # 2. Extraction de la table d'OTU (Samples en lignes, ASV en colonnes)
-  otu_mat <- as(otu_table(ps_rel), "matrix")
+  # 2. Extraction de la table d'asv (Samples en lignes, ASV en colonnes)
+  asv_mat <- as(otu_table(ps_rel), "matrix")
   # Si les taxa sont en lignes, on transpose pour avoir les samples en lignes
   if(taxa_are_rows(ps_rel)) {
-    otu_mat <- t(otu_mat)
+    asv_mat <- t(asv_mat)
   }
   
   # 3. Parametres UMAP
@@ -352,7 +374,7 @@ run_umap_phyloseq <- function(phyloseq_obj, n_neighbors = 30, min_dist = 0.6) {
   custom_config$random_state <- 42 # Seed pour avoir toujours le même dessin
   
   # 4. Exécution
-  umap_res <- umap(otu_mat, config = custom_config)
+  umap_res <- umap(asv_mat, config = custom_config)
   
   # 5. Df pour ggplot
   df_umap <- as.data.frame(umap_res$layout)
@@ -380,11 +402,11 @@ p_umap_16s <- ggplot(df_umap_16s, aes(x = UMAP1, y = UMAP2, color = Cluster)) +
   geom_point(size = 2, alpha = 0.7) +
   theme_bw() +
   theme(
-    panel.grid.major = element_blank(), # Enlève la grosse grille
-    panel.grid.minor = element_blank(), # Enlève la petite grille
-    strip.background = element_rect(fill = "white"), # Fond des titres de facettes en blanc
-    axis.text = element_blank(), # Enlève les chiffres des axes (inutiles en UMAP)
-    axis.ticks = element_blank() # Enlève les petits traits des axes
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(), 
+    strip.background = element_rect(fill = "white"),
+    axis.text = element_blank(),
+    axis.ticks = element_blank() 
   ) +
   labs(title = "UMAP - 16S (Bactéries)",
        color = "Cluster 16S")
@@ -394,11 +416,11 @@ p_umap_its <- ggplot(df_umap_its, aes(x = UMAP1, y = UMAP2, color = Cluster)) +
   geom_point(size = 2, alpha = 0.7) +
   theme_bw() +
   theme(
-    panel.grid.major = element_blank(), # Enlève la grosse grille
-    panel.grid.minor = element_blank(), # Enlève la petite grille
-    strip.background = element_rect(fill = "white"), # Fond des titres de facettes en blanc
-    axis.text = element_blank(), # Enlève les chiffres des axes (inutiles en UMAP)
-    axis.ticks = element_blank() # Enlève les petits traits des axes
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(), 
+    strip.background = element_rect(fill = "white"), 
+    axis.text = element_blank(), 
+    axis.ticks = element_blank() 
   ) +
   labs(title = "UMAP - ITS (Levures)",
        color = "Cluster ITS")
@@ -430,10 +452,10 @@ ggsave(
 # --- Fonction : Trouver les top ASV corrélés aux axes ---
 get_pcoa_drivers <- function(phyloseq_obj, pcoa_obj, n_top = 10) {
   
-  # 1. Récupérer la table d'OTU normalisée
+  # 1. Récupérer la table d'asv normalisée
   ps_rel <- transform_sample_counts(phyloseq_obj, function(x) x / sum(x))
-  otu_mat <- as(otu_table(ps_rel), "matrix")
-  if(taxa_are_rows(ps_rel)) otu_mat <- t(otu_mat) 
+  asv_mat <- as(otu_table(ps_rel), "matrix")
+  if(taxa_are_rows(ps_rel)) asv_mat <- t(asv_mat) 
   
   # 2. Récupérer les coordonnées
   axes_coords <- pcoa_obj$vectors[, 1:2]
@@ -441,15 +463,15 @@ get_pcoa_drivers <- function(phyloseq_obj, pcoa_obj, n_top = 10) {
   
   # 3. Calculer les corrélations
   cor_res <- data.frame(
-    ASV = colnames(otu_mat), # Ici "ASV" contient l'identifiant (ex: ASV1)
-    Cor_Axis1 = numeric(ncol(otu_mat)),
-    Cor_Axis2 = numeric(ncol(otu_mat)),
+    ASV = colnames(asv_mat),
+    Cor_Axis1 = numeric(ncol(asv_mat)),
+    Cor_Axis2 = numeric(ncol(asv_mat)),
     stringsAsFactors = FALSE
   )
   
-  for(i in 1:ncol(otu_mat)) {
-    cor_res$Cor_Axis1[i] <- cor(otu_mat[, i], axes_coords[, "Axis1"], method = "spearman")
-    cor_res$Cor_Axis2[i] <- cor(otu_mat[, i], axes_coords[, "Axis2"], method = "spearman")
+  for(i in 1:ncol(asv_mat)) {
+    cor_res$Cor_Axis1[i] <- cor(asv_mat[, i], axes_coords[, "Axis1"], method = "spearman")
+    cor_res$Cor_Axis2[i] <- cor(asv_mat[, i], axes_coords[, "Axis2"], method = "spearman")
   }
   
   # 4. Score d'importance
@@ -459,7 +481,7 @@ get_pcoa_drivers <- function(phyloseq_obj, pcoa_obj, n_top = 10) {
   tax_df <- as.data.frame(tax_table(phyloseq_obj))
   tax_df$ASV_ID_JOIN <- rownames(tax_df)
   
-  # On fait la jointure entre "ASV" (de cor_res) et "ASV_ID_JOIN" (de tax_df)
+  # 6. Jointure finale
   res_final <- left_join(cor_res, tax_df, by = c("ASV" = "ASV_ID_JOIN")) %>%
     arrange(desc(Importance)) %>%
     head(n_top)
@@ -531,12 +553,12 @@ p_MO_struct_16s <- ggplot(df_plot_umap_16s, aes(x = UMAP1, y = UMAP2)) +
                         na.value = "grey90") +
   theme_bw() +
   theme(
-    panel.grid.major = element_blank(), # Enlève la grosse grille
-    panel.grid.minor = element_blank(), # Enlève la petite grille
-    strip.background = element_rect(fill = "white"), # Fond des titres de facettes en blanc
-    strip.text = element_text(face = "bold", size = 9), # Titres des ASV en italique
-    axis.text = element_blank(), # Enlève les chiffres des axes (inutiles en UMAP)
-    axis.ticks = element_blank() # Enlève les petits traits des axes
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(), 
+    strip.background = element_rect(fill = "white"), 
+    strip.text = element_text(face = "bold", size = 9), 
+    axis.text = element_blank(), 
+    axis.ticks = element_blank() 
   ) +
   labs(title = "16S : Abondance relatives de MO structurants visualisés sur l'UMAP",
        x = "UMAP 1\n→", y = "→\nUMAP 2")
@@ -588,12 +610,12 @@ p_MO_struct_its <- ggplot(df_plot_umap_its, aes(x = UMAP1, y = UMAP2)) +
                         na.value = "grey90") +
   theme_bw() +
   theme(
-    panel.grid.major = element_blank(), # Enlève la grosse grille
-    panel.grid.minor = element_blank(), # Enlève la petite grille
-    strip.background = element_rect(fill = "white"), # Fond des titres de facettes en blanc
-    strip.text = element_text(face = "bold", size = 9), # Titres des ASV en italique
-    axis.text = element_blank(), # Enlève les chiffres des axes (inutiles en UMAP)
-    axis.ticks = element_blank() # Enlève les petits traits des axes
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(), 
+    strip.background = element_rect(fill = "white"), 
+    strip.text = element_text(face = "bold", size = 9), 
+    axis.text = element_blank(), 
+    axis.ticks = element_blank() 
   ) +
   labs(title = "ITS : Abondance relatives de MO structurants visualisés sur l'UMAP",
        x = "UMAP 1\n→", y = "→\nUMAP 2")
@@ -722,9 +744,9 @@ p_permanova_combined <- ggplot(df_permanova_combined, aes(x = reorder(Variable, 
     theme_bw() +
   theme(
     legend.position = "none",
-    panel.grid.major = element_blank(), # Enlève la grosse grille
-    panel.grid.minor = element_blank(), # Enlève la petite grille
-    strip.background = element_rect(fill = "white"), # Fond des titres de facettes en blanc
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(), 
+    strip.background = element_rect(fill = "white"), 
     strip.text = element_text(face = "bold", size = 9),
     axis.text.y = element_text(size = 10, face = "bold"),
   ) +
@@ -751,13 +773,6 @@ ggsave(
 ## Plot abond. relatives + top 10 des ASVs 
 
 ```{r}
-library(ggplot2)
-library(dplyr)
-library(tidyr)
-library(gridExtra)
-library(grid)
-library(svglite)
-
 prepare_rank_abundance_poster <- function(physeq_obj, title_label) {
   # -- 1 : taxo et top 6 global --
   tax_df <- as.data.frame(tax_table(physeq_obj)) %>%
@@ -779,11 +794,11 @@ prepare_rank_abundance_poster <- function(physeq_obj, title_label) {
   tax_df$Legend_Name <- factor(tax_df$Temp_Name, levels = legend_levels)
 
   # -- 2: calcul Ranks (top 10 par sample) --
-  otu_mat <- as.matrix(otu_table(physeq_obj))
-  ranked_values <- apply(otu_mat, 2, function(x) sort(x, decreasing = TRUE)[1:10])
-  ranked_ids <- apply(otu_mat, 2, function(x) names(sort(x, decreasing = TRUE))[1:10])
+  asv_mat <- as.matrix(otu_table(physeq_obj))
+  ranked_values <- apply(asv_mat, 2, function(x) sort(x, decreasing = TRUE)[1:10])
+  ranked_ids <- apply(asv_mat, 2, function(x) names(sort(x, decreasing = TRUE))[1:10])
   
-  df_long <- bind_rows(lapply(1:ncol(otu_mat), function(i) {
+  df_long <- bind_rows(lapply(1:ncol(asv_mat), function(i) {
     data.frame(Rank = 1:10, Abundance = ranked_values[, i] * 100, ASV_ID = ranked_ids[, i])
   })) %>%
     left_join(tax_df %>% select(Legend_Name) %>% tibble::rownames_to_column("ASV_ID"), by = "ASV_ID")
@@ -840,11 +855,6 @@ ggsave(
 ## Plot réseaux d'interactions (co-occurences)
 
 ```{r}
-library(phyloseq)
-library(tidyverse)
-library(igraph)
-library(ggraph)
-
 # -- 1 : regroupement des ASVs par espèce --
 ps_16s_gp <- tax_glom(phylos_16s, taxrank = "Species")
 ps_its_gp <- tax_glom(phylos_its, taxrank = "Species")
@@ -861,9 +871,9 @@ total_abund <- c(abund_16s, abund_its)
 
 # -- 3 : Analyse des co-occurrences (Spearman) --
 # fusion des tables bacteries et fungi en une matrice pour l'analyse
-combined_otu <- cbind(as.data.frame(t(otu_table(keep_16s))), 
+combined_asv <- cbind(as.data.frame(t(otu_table(keep_16s))), 
                       as.data.frame(t(otu_table(keep_its))))
-cor_matrix <- cor(combined_otu, method = "spearman")
+cor_matrix <- cor(combined_asv, method = "spearman")
 
 #seuil de significativité (ignorer les relations faibles)
 cor_matrix[abs(cor_matrix) < 0.13] <- 0
